@@ -74,25 +74,34 @@ Authorization: <your_token>
 
 ---
 
-## 4. Connection Flow
+## 4. Connection Flow (Updated)
 
-1. Establish WebSocket connection with proper `Authorization` header.
-2. Send query parameters for symbols/ISINs and channels:
+1. Establish WebSocket connection with the proper `Authorization` header.
+
+2. Include query parameters in the URL. **Each symbol/ISIN and channel is repeated as a separate query parameter**:
 
 ```
-?symbol_isins=<comma-separated-list>&channels=<comma-separated-list>
-```
-or
-```
-?symbol_names=<comma-separated-list>&channels=<comma-separated-list>
+wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?
+channels=<channel1>&channels=<channel2>&
+symbol_isins=<ISIN1>&symbol_isins=<ISIN2>
 ```
 
-3. Server verifies permission via `SecuritiesExchangeLiveData_WS_Access_Permission`.
-4. If verification passes, the WebSocket is accepted.
-5. The server subscribes to requested Redis streams internally.
-6. Real-time messages are sent continuously until the connection is closed.
+or for symbol names:
 
-**Unauthorized connections** are closed immediately with code `1008`.
+```
+wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/name?
+channels=<channel1>&channels=<channel2>&
+symbol_names=<symbol1>&symbol_names=<symbol2>
+```
+
+3. If verification passes, the WebSocket connection is accepted.
+
+4. The server subscribes to the requested Redis streams internally.
+
+5. Real-time messages are streamed continuously until the connection is closed.
+
+**Important:** Unauthorized connections are closed immediately with **code 1008**.
+
 
 ---
 
@@ -337,7 +346,105 @@ async def subscribe():
 asyncio.run(subscribe())
 ```
 
-### 9.2 Subscription Notes
+### 9.2 JavaScript (WebSocket Client)
+
+```javascript
+const WebSocket = require('ws');
+
+const url = 'wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?channels=order-book&channels=best-limit&symbol_isins=IRT3SATF0001&symbol_isins=IRTKMOFD0001';
+const token = '<your_token>';
+
+const ws = new WebSocket(url, { headers: { Authorization: token } });
+
+ws.on('open', () => {
+  console.log('Connected');
+});
+
+ws.on('message', (data) => {
+  const message = JSON.parse(data);
+  console.log(message);
+});
+
+ws.on('close', () => {
+  console.log('Disconnected');
+});
+```
+
+### 9.3 Go (WebSocket Client)
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+    "github.com/gorilla/websocket"
+)
+
+func main() {
+    url := "wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?channels=order-book&channels=best-limit&symbol_isins=IRT3SATF0001&symbol_isins=IRTKMOFD0001"
+    header := map[string][]string{
+        "Authorization": {"<your_token>"},
+    }
+
+    c, _, err := websocket.DefaultDialer.Dial(url, header)
+    if err != nil {
+        log.Fatal("dial:", err)
+    }
+    defer c.Close()
+
+    for {
+        _, message, err := c.ReadMessage()
+        if err != nil {
+            log.Println("read:", err)
+            break
+        }
+        fmt.Println(string(message))
+    }
+}
+```
+
+### 9.4 Julia (WebSocket Client)
+
+```julia
+using WebSockets, JSON
+
+url = "wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?channels=order-book&channels=best-limit&symbol_isins=IRT3SATF0001&symbol_isins=IRTKMOFD0001"
+token = "<your_token>"
+
+WebSockets.open(url, extra_headers=["Authorization" => token]) do ws
+    while !eof(ws)
+        msg = String(readavailable(ws))
+        data = JSON.parse(msg)
+        println(data)
+    end
+end
+```
+
+### 9.5 Rust (WebSocket Client)
+
+```rust
+use tokio_tungstenite::connect_async;
+use futures_util::{StreamExt};
+use url::Url;
+
+#[tokio::main]
+async fn main() {
+    let url = Url::parse("wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?channels=order-book&channels=best-limit&symbol_isins=IRT3SATF0001&symbol_isins=IRTKMOFD0001").unwrap();
+    let req = tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(url).unwrap();
+    let (ws_stream, _) = connect_async(req).await.expect("Failed to connect");
+
+    let (mut write, mut read) = ws_stream.split();
+
+    while let Some(message) = read.next().await {
+        let msg = message.unwrap();
+        println!("{:?}", msg);
+    }
+}
+```
+
+
+### 9.6 Subscription Notes
 
 - Multiple symbols and channels can be subscribed in a **single WebSocket connection**.
 - The server streams messages continuously; handle them asynchronously.
