@@ -65,8 +65,8 @@ Authorization: <your_token>
 
 | Endpoint | Description |
 |----------|-------------|
-| `/live/data/websocket/symbol/isin` | Subscribe using **ISIN** codes |
-| `/live/data/websocket/symbol/name` | Subscribe using **symbol names** |
+| `wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin` | Subscribe using **ISIN** codes |
+| `wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/name` | Subscribe using **symbol names** |
 
 **Note:** The output payload structure is identical for both endpoints, except the symbol identifier field:
 - `symbolIsin` for `/symbol/isin`
@@ -107,7 +107,7 @@ or
 **Example URL:**
 
 ```
-wss://core.hedgetech.ir/live/data/websocket/symbol/isin?symbol_isins=IRO1XYZ1234,IRO2ABC567&channels=best-limit,order-book
+wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?channels=order-book&channels=best-limit&symbol_isins=IRT3SATF0001&symbol_isins=IRTKMOFD0001
 ```
 
 ---
