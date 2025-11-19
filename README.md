@@ -1,4 +1,4 @@
-# HT Data Engine | TSE & IFB | websocket
+# HT Data Engine | TSE & IFB | WebSocket
 ## Real-Time Market Streams (TSE & IFB)  
 ### WebSocket • High-Frequency • Low-Latency
 
@@ -74,6 +74,60 @@ Authorization: <your_token>
 
 ---
 
+### 🔶 Important Clarification: ISIN vs Symbol-Name WebSocket Endpoints
+
+The data engine provides **two separate WebSocket endpoints**:
+
+1. **Subscribe using ISIN codes**
+   ```
+   wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin
+   ```
+
+2. **Subscribe using Symbol Names**
+   ```
+   wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/name
+   ```
+
+Both endpoints deliver **identical payload structures**, including the same channels and the same `data` schema.  
+The **only difference** is the identifier field inside each message:
+
+| Endpoint | Identifier Field in Payload |
+|----------|------------------------------|
+| `/symbol/isin` | `"symbolIsin": "<ISIN>"` |
+| `/symbol/name` | `"symbolName": "<Symbol>"` |
+
+Example for ISIN endpoint:
+
+```json
+{
+  "channel": "best-limit",
+  "symbolIsin": "IRO1XYZ1234",
+  "timestamp": "2025-11-14T12:00:00.000000",
+  "data": { ... }
+}
+```
+
+Example for Symbol-Name endpoint:
+
+```json
+{
+  "channel": "best-limit",
+  "symbolName": "XYZ",
+  "timestamp": "2025-11-14T12:00:00.000000",
+  "data": { ... }
+}
+```
+
+No other structural difference exists between these two WebSocket services.
+
+**Why this clarification matters**
+
+- Consumers might assume that subscribing to the symbol-name endpoint returns a different schema — it does not.
+- Client implementations should be prepared to handle either identifier field (`symbolIsin` or `symbolName`) depending on which endpoint they connect to.
+- This avoids confusing bugs (for example: looking for `symbolIsin` in messages coming from the `/symbol/name` endpoint).
+
+---
+
 ## 4. Connection Flow (Updated)
 
 1. Establish WebSocket connection with the proper `Authorization` header.
@@ -96,12 +150,9 @@ symbol_names=<symbol1>&symbol_names=<symbol2>
 
 3. If verification passes, the WebSocket connection is accepted.
 
-4. The server subscribes to the requested Redis streams internally.
-
-5. Real-time messages are streamed continuously until the connection is closed.
+4. Real-time messages are streamed continuously until the connection is closed.
 
 **Important:** Unauthorized connections are closed immediately with **code 1008**.
-
 
 ---
 
@@ -133,6 +184,8 @@ All messages are delivered in the following **JSON structure**:
     "data": { ... channel-specific payload ... }
 }
 ```
+
+> NOTE: For the `/symbol/name` endpoint the `symbolIsin` field above is replaced by `symbolName`. Everything else remains the same.
 
 | Channel | Payload Model | Description |
 |---------|---------------|-------------|
@@ -173,6 +226,7 @@ All messages are delivered in the following **JSON structure**:
   }
 }
 ```
+
 ---
 
 ### 6.2 Example: `order-book`
@@ -200,6 +254,7 @@ All messages are delivered in the following **JSON structure**:
   }
 }
 ```
+
 ---
 
 ### 6.3 Example: `ohlcv-last-1m`
@@ -218,6 +273,7 @@ All messages are delivered in the following **JSON structure**:
   }
 }
 ```
+
 ---
 
 ### 6.4 Example: `aggregate`
@@ -242,6 +298,7 @@ All messages are delivered in the following **JSON structure**:
   }
 }
 ```
+
 ---
 
 ### 6.5 Example: `institutional-vs-individual`
@@ -263,6 +320,7 @@ All messages are delivered in the following **JSON structure**:
   }
 }
 ```
+
 ---
 
 ### 6.6 Example: `contract-info`
@@ -279,6 +337,7 @@ All messages are delivered in the following **JSON structure**:
   }
 }
 ```
+
 ---
 
 ### 6.7 Example: `fund-info`
@@ -296,9 +355,8 @@ All messages are delivered in the following **JSON structure**:
   }
 }
 ```
+
 ---
-
-
 
 ### 7. Other Channels
 
@@ -312,6 +370,8 @@ Payload models follow the **Pydantic models** provided (`Aggregate`, `OrderBook`
   "data": { ...channel-specific data... }
 }
 ```
+
+> NOTE: Replace `symbolIsin` with `symbolName` when using the `/symbol/name` endpoint.
 
 ---
 
@@ -328,22 +388,29 @@ Payload models follow the **Pydantic models** provided (`Aggregate`, `OrderBook`
 
 ### 9.1 Python (WebSocket Client)
 
+This example adds a small helper to **support both endpoints** by checking which identifier field exists in incoming messages.
+
 ```python
 import asyncio
 import websockets
 import json
 
-async def subscribe():
-    url = "wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?channels=order-book&channels=best-limit&symbol_isins=IRT3SATF0001&symbol_isins=IRTKMOFD0001"
-    headers = {
-        "Authorization": "<your_token>"
-    }
+async def subscribe(url: str, token: str):
+    headers = {"Authorization": token}
     async with websockets.connect(url, extra_headers=headers) as ws:
         async for message in ws:
             data = json.loads(message)
-            print(data)
+            # safely extract identifier regardless of endpoint
+            symbol = data.get("symbolIsin") or data.get("symbolName")
+            channel = data.get("channel")
+            ts = data.get("timestamp")
+            # process payload...
+            print(f"{ts} | {symbol} | {channel} -> {data['data']}")
 
-asyncio.run(subscribe())
+# example use (choose the endpoint you need)
+url = "wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?channels=order-book&channels=best-limit&symbol_isins=IRT3SATF0001"
+token = "<your_token>"
+asyncio.run(subscribe(url, token))
 ```
 
 ### 9.2 JavaScript (WebSocket Client)
@@ -351,23 +418,23 @@ asyncio.run(subscribe())
 ```javascript
 const WebSocket = require('ws');
 
-const url = 'wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?channels=order-book&channels=best-limit&symbol_isins=IRT3SATF0001&symbol_isins=IRTKMOFD0001';
+function normalizeMessage(message) {
+  const msg = JSON.parse(message);
+  const symbol = msg.symbolIsin || msg.symbolName;
+  return { ...msg, symbol };
+}
+
+const url = 'wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?channels=order-book&channels=best-limit&symbol_isins=IRT3SATF0001';
 const token = '<your_token>';
 
 const ws = new WebSocket(url, { headers: { Authorization: token } });
 
-ws.on('open', () => {
-  console.log('Connected');
-});
-
+ws.on('open', () => console.log('Connected'));
 ws.on('message', (data) => {
-  const message = JSON.parse(data);
-  console.log(message);
+  const message = normalizeMessage(data);
+  console.log(message.timestamp, message.symbol, message.channel, message.data);
 });
-
-ws.on('close', () => {
-  console.log('Disconnected');
-});
+ws.on('close', () => console.log('Disconnected'));
 ```
 
 ### 9.3 Go (WebSocket Client)
@@ -376,13 +443,14 @@ ws.on('close', () => {
 package main
 
 import (
+    "encoding/json"
     "fmt"
     "log"
     "github.com/gorilla/websocket"
 )
 
 func main() {
-    url := "wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?channels=order-book&channels=best-limit&symbol_isins=IRT3SATF0001&symbol_isins=IRTKMOFD0001"
+    url := "wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?channels=order-book&channels=best-limit&symbol_isins=IRT3SATF0001"
     header := map[string][]string{
         "Authorization": {"<your_token>"},
     }
@@ -399,7 +467,15 @@ func main() {
             log.Println("read:", err)
             break
         }
-        fmt.Println(string(message))
+        var m map[string]interface{}
+        json.Unmarshal(message, &m)
+        symbol := ""
+        if v, ok := m["symbolIsin"]; ok {
+            symbol = v.(string)
+        } else if v, ok := m["symbolName"]; ok {
+            symbol = v.(string)
+        }
+        fmt.Println(m["timestamp"], symbol, m["channel"])
     }
 }
 ```
@@ -409,14 +485,15 @@ func main() {
 ```julia
 using WebSockets, JSON
 
-url = "wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?channels=order-book&channels=best-limit&symbol_isins=IRT3SATF0001&symbol_isins=IRTKMOFD0001"
+url = "wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?channels=order-book&channels=best-limit&symbol_isins=IRT3SATF0001"
 token = "<your_token>"
 
 WebSockets.open(url, extra_headers=["Authorization" => token]) do ws
     while !eof(ws)
         msg = String(readavailable(ws))
         data = JSON.parse(msg)
-        println(data)
+        symbol = get(data, "symbolIsin", get(data, "symbolName", ""))
+        println(data["timestamp"], " ", symbol, " ", data["channel"])
     end
 end
 ```
@@ -427,22 +504,28 @@ end
 use tokio_tungstenite::connect_async;
 use futures_util::{StreamExt};
 use url::Url;
+use serde_json::Value;
 
 #[tokio::main]
 async fn main() {
-    let url = Url::parse("wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?channels=order-book&channels=best-limit&symbol_isins=IRT3SATF0001&symbol_isins=IRTKMOFD0001").unwrap();
+    let url = Url::parse("wss://core.hedgetech.ir/data-engine/tse-ifb/live/data/websocket/symbol/isin?channels=order-book&channels=best-limit&symbol_isins=IRT3SATF0001").unwrap();
     let req = tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(url).unwrap();
     let (ws_stream, _) = connect_async(req).await.expect("Failed to connect");
 
-    let (mut write, mut read) = ws_stream.split();
+    let (_write, mut read) = ws_stream.split();
 
     while let Some(message) = read.next().await {
         let msg = message.unwrap();
-        println!("{:?}", msg);
+        if msg.is_text() {
+            let v: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            let symbol = v.get("symbolIsin").or_else(|| v.get("symbolName"));
+            println!("{:?} {:?} {:?}", v["timestamp"], symbol, v["channel"]);
+        }
     }
 }
 ```
 
+---
 
 ### 9.6 Subscription Notes
 
@@ -457,6 +540,19 @@ async fn main() {
 - Reconnect with **exponential backoff** in case of disconnects.
 - Validate your JWT **before subscribing**.
 - Subscribe only to the channels you need to reduce bandwidth.
-- Handle `symbolIsin` extraction consistently in your client code.
+- Handle `symbolIsin` / `symbolName` extraction consistently in your client code:
+  - Prefer a helper function that returns a single canonical `symbol` value.
+  - Log incoming messages and detect which endpoint you are connected to (optional, for debugging).
+
+---
+
+## Appendix: Quick developer checklist (for avoiding common mistakes)
+
+- ✅ Use correct endpoint for your identifier type (`symbol/isin` vs `symbol/name`).
+- ✅ Provide `Authorization` header with a valid token on the WebSocket handshake.
+- ✅ Include `channels` and `symbol_isins` / `symbol_names` as repeated query params.
+- ✅ Handle both `symbolIsin` and `symbolName` in your message parsing to make the client resilient.
+- ✅ Treat messages' `data` payload consistently across endpoints (same schema).
+- ✅ Monitor for WS close code `1008` to detect authorization or policy errors.
 
 ---
